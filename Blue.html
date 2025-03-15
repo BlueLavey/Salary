@@ -21,8 +21,10 @@
     body.dark-mode .table {
       color: #e0e0e0;
     }
-    /* Ensure selected rows highlight in blue */
-    .table-active {
+    /* Force blue selection highlight */
+    .table-active,
+    table.table-striped.table-hover tbody tr.table-active,
+    body.dark-mode table tr.table-active {
       background-color: #0d6efd !important;
       color: #fff !important;
     }
@@ -32,9 +34,46 @@
       flex-wrap: wrap;
       gap: 0.5rem;
     }
+    /* Login modal custom style */
+    .login-modal .modal-content {
+      max-width: 400px;
+      margin: auto;
+    }
   </style>
 </head>
 <body>
+  <!-- Login Modal -->
+  <div class="modal fade login-modal" id="loginModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="loginModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="loginModalLabel">Please Log In</h5>
+        </div>
+        <div class="modal-body">
+          <form id="loginForm">
+            <div class="mb-3">
+              <label for="loginUsername" class="form-label">Username</label>
+              <select id="loginUsername" class="form-select" required>
+                <option value="">Select User</option>
+                <option value="Captain">Captain</option>
+                <option value="Gov">Gov</option>
+                <option value="Erin">Erin</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label for="loginPassword" class="form-label">Password</label>
+              <input type="password" id="loginPassword" class="form-control" required>
+            </div>
+            <div id="loginError" class="text-danger"></div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="loginBtn" class="btn btn-primary">Log In</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Navbar with Dark Mode Toggle -->
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
     <div class="container-fluid">
@@ -43,7 +82,7 @@
     </div>
   </nav>
   
-  <div class="container my-4">
+  <div class="container my-4" id="appContent" style="display: none;">
     <!-- Editable Hourly Wage Field -->
     <div class="mb-3">
       <label for="hourlyWageInput" class="form-label">Hourly Wage (JPY):</label>
@@ -170,33 +209,90 @@
   <!-- Bootstrap JS Bundle -->
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script>
-    // Load stored data or initialize new data
-    let hourlyWage = parseFloat(localStorage.getItem('hourlyWage')) || 1114;
-    let currentData = JSON.parse(localStorage.getItem('currentData')) || { period: "", records: [] };
-    let historyData = JSON.parse(localStorage.getItem('historyData')) || [];
+    /* ===== Constants for API endpoints ===== */
+    const API_URL = "https://script.google.com/macros/s/AKfycbwnnY0OG-Cfwo1qtxHeCHY2V4W_O6AYuNr2u4jFfAkxnPgyp2gg6IiWPwqsbUmITui5_g/exec";
+    
+    /* ===== Global Variables ===== */
+    let currentUser = null; // set after successful login
+    let hourlyWage = 1114;  // default wage; may be loaded from server for the user
+    let currentData = { period: "", records: [] };
+    let historyData = [];
     let selectedCurrentIndex = null;
     let selectedHistoryIndex = null;
-
-    // Save data to localStorage
-    function saveData() {
-      localStorage.setItem('hourlyWage', hourlyWage);
-      localStorage.setItem('currentData', JSON.stringify(currentData));
-      localStorage.setItem('historyData', JSON.stringify(historyData));
+    
+    /* ===== Authentication ===== */
+    function login() {
+      const username = document.getElementById("loginUsername").value;
+      const password = document.getElementById("loginPassword").value;
+      const loginError = document.getElementById("loginError");
+      loginError.innerText = "";
+      
+      if (!username || !password) {
+        loginError.innerText = "Please enter both username and password.";
+        return;
+      }
+      
+      // Send login info to our API for verification.
+      fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "login", username, password })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          currentUser = username;
+          // Hide login modal and show main app content
+          bootstrap.Modal.getInstance(document.getElementById("loginModal")).hide();
+          document.getElementById("appContent").style.display = "block";
+          if(data.hourlyWage) {
+            hourlyWage = data.hourlyWage;
+            document.getElementById("hourlyWageInput").value = hourlyWage;
+          }
+          loadSalaryData(); // load user’s salary data
+        } else {
+          loginError.innerText = "Login failed. Please check your credentials.";
+        }
+      })
+      .catch(error => {
+        console.error("Error during login:", error);
+        loginError.innerText = "An error occurred. Please try again.";
+      });
     }
-
-    // Set the hourly wage input value on page load
-    document.getElementById("hourlyWageInput").value = hourlyWage;
-
-    // Update hourlyWage when the user edits the input
-    document.getElementById("hourlyWageInput").addEventListener("input", function() {
-      hourlyWage = parseFloat(this.value) || 0;
-      saveData();
-      refreshCurrentTable();
-      refreshHistoryTable();
-      updateLiveCalculation();
-    });
-
-    // Refresh the Current Period table and totals
+    
+    /* ===== Data Functions ===== */
+    function loadSalaryData() {
+      fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "getData", user: currentUser })
+      })
+      .then(response => response.json())
+      .then(data => {
+        if(data.currentData) {
+          currentData = data.currentData;
+        }
+        if(data.historyData) {
+          historyData = data.historyData;
+        }
+        refreshCurrentTable();
+        refreshHistoryTable();
+      })
+      .catch(error => console.error("Error loading salary data:", error));
+    }
+    
+    function saveData() {
+      fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "saveData", user: currentUser, currentData, historyData })
+      })
+      .then(response => response.json())
+      .then(data => console.log("Data saved:", data))
+      .catch(error => console.error("Error saving data:", error));
+    }
+    
+    /* ===== UI Functions ===== */
     function refreshCurrentTable() {
       const tbody = document.querySelector("#currentTable tbody");
       tbody.innerHTML = "";
@@ -210,13 +306,11 @@
           <td>${rec.hours}</td>
           <td>${(rec.hours * hourlyWage).toLocaleString()}</td>
         `;
-        // Select row on click (toggle blue highlight)
         tr.addEventListener("click", function() {
           document.querySelectorAll("#currentTable tbody tr").forEach(row => row.classList.remove("table-active"));
           this.classList.add("table-active");
           selectedCurrentIndex = index;
         });
-        // Double-click to open edit modal
         tr.addEventListener("dblclick", function() {
           openRecordModal(index);
         });
@@ -227,8 +321,7 @@
       document.getElementById("currentTotals").innerText = `Total Hours: ${totalHours} | Total Earnings: ${totalEarnings.toLocaleString()} JPY`;
       saveData();
     }
-
-    // Refresh the History table
+    
     function refreshHistoryTable() {
       const tbody = document.querySelector("#historyTable tbody");
       tbody.innerHTML = "";
@@ -238,7 +331,6 @@
         const tr = document.createElement("tr");
         tr.classList.add("pointer");
         tr.dataset.index = index;
-        // Display the pay period or fallback label
         const periodLabel = period.period ? period.period : "Unknown Period";
         tr.innerHTML = `
           <td>${periodLabel}</td>
@@ -250,7 +342,6 @@
           this.classList.add("table-active");
           selectedHistoryIndex = index;
         });
-        // Double-click opens detailed view modal
         tr.addEventListener("dblclick", function() {
           openHistoryDetailModal(index);
         });
@@ -258,16 +349,14 @@
       });
       saveData();
     }
-
-    // Update live calculated earnings in the record modal
+    
     function updateLiveCalculation() {
       const hoursInput = document.getElementById("recordHours");
       const calcDiv = document.getElementById("calculatedEarnings");
       let hours = parseFloat(hoursInput.value) || 0;
       calcDiv.innerText = `Earnings: ${(hours * hourlyWage).toLocaleString()} JPY`;
     }
-
-    // Open modal to add or edit a current record
+    
     function openRecordModal(index = null) {
       selectedCurrentIndex = index;
       const modal = new bootstrap.Modal(document.getElementById('recordModal'));
@@ -285,8 +374,7 @@
       updateLiveCalculation();
       modal.show();
     }
-
-    // Open modal to view details for a selected history period
+    
     function openHistoryDetailModal(index) {
       selectedHistoryIndex = index;
       const period = historyData[index];
@@ -309,8 +397,7 @@
       const modal = new bootstrap.Modal(document.getElementById('historyDetailModal'));
       modal.show();
     }
-
-    // Edit a detail record in a history period
+    
     function editHistoryDetail(periodIndex, recIndex) {
       const period = historyData[periodIndex];
       const rec = period.records[recIndex];
@@ -321,8 +408,7 @@
         openHistoryDetailModal(periodIndex);
       }
     }
-
-    // Delete a detail record in a history period
+    
     function deleteHistoryDetail(periodIndex, recIndex) {
       if(confirm("Are you sure you want to delete this record?")) {
         historyData[periodIndex].records.splice(recIndex, 1);
@@ -330,17 +416,31 @@
         openHistoryDetailModal(periodIndex);
       }
     }
-
-    // Event listeners for Current Period actions
+    
+    /* ===== Event Listeners ===== */
+    document.getElementById("loginBtn").addEventListener("click", login);
+    
+    window.addEventListener("load", function() {
+      const loginModal = new bootstrap.Modal(document.getElementById("loginModal"));
+      loginModal.show();
+    });
+    
+    document.getElementById("hourlyWageInput").addEventListener("input", function() {
+      hourlyWage = parseFloat(this.value) || 0;
+      refreshCurrentTable();
+      refreshHistoryTable();
+      updateLiveCalculation();
+      saveData();
+    });
+    
     document.getElementById("addRecordBtn").addEventListener("click", () => {
       openRecordModal();
     });
-
+    
     document.getElementById("saveRecordBtn").addEventListener("click", () => {
       const recordDate = document.getElementById("recordDate").value;
       const recordHours = parseFloat(document.getElementById("recordHours").value);
       if(!recordDate || isNaN(recordHours)) return;
-      // Check if a record exists for the date
       const existingIndex = currentData.records.findIndex(r => r.date === recordDate);
       if(existingIndex !== -1) {
         currentData.records[existingIndex].hours = recordHours;
@@ -350,7 +450,7 @@
       refreshCurrentTable();
       bootstrap.Modal.getInstance(document.getElementById('recordModal')).hide();
     });
-
+    
     document.getElementById("deleteRecordBtn").addEventListener("click", () => {
       if(selectedCurrentIndex === null) {
         alert("Please select a record to delete.");
@@ -362,11 +462,9 @@
         refreshCurrentTable();
       }
     });
-
-    // Event listener for archiving the current period
+    
     document.getElementById("newPeriodBtn").addEventListener("click", () => {
       if(confirm("Are you sure you want to archive the current period and start a new one?")) {
-        // Prompt for pay period start and end dates.
         let startDate = prompt("Enter the start date for this pay period (YYYY-MM-DD):", new Date().toISOString().slice(0,10));
         let endDate = prompt("Enter the end date for this pay period (YYYY-MM-DD):", new Date().toISOString().slice(0,10));
         let periodStr = "";
@@ -375,18 +473,15 @@
         } else {
           periodStr = new Date().toISOString().slice(0,7);
         }
-        // Save the period range in the archived data.
         currentData.period = periodStr;
         historyData.push(currentData);
-        // Start a new current period with an empty period label.
         currentData = { period: "", records: [] };
         refreshCurrentTable();
         refreshHistoryTable();
         saveData();
       }
     });
-
-    // Event listener for deleting an archived period
+    
     document.getElementById("deletePeriodBtn").addEventListener("click", () => {
       if(selectedHistoryIndex === null) {
         alert("Please select a period to delete.");
@@ -398,15 +493,10 @@
         refreshHistoryTable();
       }
     });
-
-    // Dark mode toggle
+    
     document.getElementById("toggleDarkMode").addEventListener("click", () => {
       document.body.classList.toggle("dark-mode");
     });
-
-    // Initialize tables on page load
-    refreshCurrentTable();
-    refreshHistoryTable();
   </script>
 </body>
 </html>
